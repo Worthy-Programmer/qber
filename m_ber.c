@@ -1,10 +1,60 @@
+/*
+  Developer(s): EE24B016, EE24B047, EE24B122,  ChatGPT (for comments and guidance)
+  Date: 29th September 2024
+  Purpose: Analyze Photon Detector Timestamps to Estimate BER and Visibility with Guard Bands
+  Description:
+    This program reads photon detection timestamps from a CSV file, bins the data into a 32ns time window,
+    and identifies a 3ns window where the total count of timestamps is maximized. It divides the 3ns window
+    into three 1ns bins (C1, D1, C2) to estimate the bit error rate (BER1) and visibility (V1).
+    The program then applies 100ps guard bands between the 1ns bins, discards timestamps within the guard bands,
+    and recalculates the counts to estimate a new BER (BER2) and visibility (V2).
+
+  Input(s):
+    - A CSV file containing photon detector timestamps in the first column (in picoseconds).
+      The second column (if present) is ignored.
+
+  Output(s):
+    - Group, BER1, Visibility1, BER2, and Visibility2 printed to the console.
+    - (Optional) Output to a file for future analysis.
+
+  Key Operations:
+    - Modulo operation to bin timestamps within a 32ns window.
+    - Sliding window algorithm to identify the 3ns window with the maximum count.
+    - Guard bands applied between consecutive 1ns bins to discard erroneous data.
+
+  Usage:
+    - Compile and run the program by providing a CSV file as input:
+      Example:
+      ./a.out timestamps.csv
+
+    - CSV format:
+      timestamp1, value1
+      timestamp2, value2
+      (Only the first column is used in the analysis)
+*/
+/*
+  Is 100ps Guard Band Adequate?
+  When using timestamps_1.csv, executing the find_optimal_guard_bands() function will yield both the "Optimal Guard Band for Minimum BER" and the "Optimal Guard Band for Maximum Visibility" at 130ps.
+  Therefore, for the provided timestamps_1.csv, the optimal guard band is determined to be 130ps. 
+  (Note that the maximum guard band is set to 300ps to prevent the loss of too many valid signals.)
+
+
+  General answer:
+  Based on typical photon detection timing uncertainties, 100ps seems to provide a good balance. It eliminates erroneous data points without discarding too many valid timestamps. However, depending on the noise characteristics of the system, adjusting the guard band width might yield better results.
+  Increasing the guard band (e.g., to 200ps) would further reduce BER but might also remove too many valid signals, lowering visibility.
+  Decreasing the guard band (e.g., to 50ps) might allow more valid timestamps to be counted but could increase noise, negatively affecting BER.
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h> // For fmod
 
 #define WINDOW_SIZE 32000 // 32ns in picoseconds
-#define GUARD_BAND 100    // 100ps guard band
+#define GUARD_BAND 150    // 100ps guard band
 #define GROUP "M"
+#define MAX_GUARD_BAND 300 // Maximum guard band in ps
+#define MIN_GUARD_BAND 100 // Minimum guard band in ps
+#define GUARD_BAND_STEP 1 // Step size for guard bands
 
 // Function to read timestamps from CSV, modulo them by 32000ps, and populate histogram
 void process_csv_and_create_histogram(const char *filename, int *histogram)
@@ -102,7 +152,7 @@ double find_max_sum_window(int histogram[], int size, int window_size, double *B
 }
 
 // Function to apply guard bands and calculate BER2 and Visibility2
-void apply_guard_bands_and_calculate(int histogram[], int start_index, int window_size, double *BER2, double *V2)
+void apply_guard_bands_and_calculate(int histogram[], int start_index, int window_size, double *BER2, double *V2, int guard_band)
 {
   int part_size = window_size / 3;
   int C1 = 0, D1 = 0, C2 = 0;
@@ -111,7 +161,7 @@ void apply_guard_bands_and_calculate(int histogram[], int start_index, int windo
   for (int i = start_index; i < start_index + window_size; i++)
   {
     // If within the guard band, skip the timestamp
-    if ((i % 1000) < GUARD_BAND || (i % 1000) > (1000 - GUARD_BAND))
+    if ((i % 1000) < guard_band || (i % 1000) > (1000 - guard_band))
     {
       continue; // Skip timestamps in the guard band
     }
@@ -136,6 +186,42 @@ void apply_guard_bands_and_calculate(int histogram[], int start_index, int windo
   *V2 = (double)D1 / (C1 + C2);
 }
 
+// Function to loop through different guard bands and find optimal values
+void find_optimal_guard_bands(int histogram[], int start_index, int window_size)
+{
+  double min_BER = 1.0;        // Initialize with max possible BER (1)
+  double max_visibility = 0.0; // Initialize with min possible Visibility (0)
+  int optimal_BER_guard_band = 0;
+  int optimal_visibility_guard_band = 0;
+
+  // Loop through guard band widths
+  for (int guard_band = MIN_GUARD_BAND; guard_band <= MAX_GUARD_BAND; guard_band += GUARD_BAND_STEP)
+  {
+    double BER, visibility;
+
+    // Calculate BER and visibility for the current guard band
+    apply_guard_bands_and_calculate(histogram, start_index, window_size, &BER, &visibility, guard_band);
+
+    // Update minimum BER and corresponding guard band
+    if (BER < min_BER)
+    {
+      min_BER = BER;
+      optimal_BER_guard_band = guard_band;
+    }
+
+    // Update maximum Visibility and corresponding guard band
+    if (visibility > max_visibility)
+    {
+      max_visibility = visibility;
+      optimal_visibility_guard_band = guard_band;
+    }
+  }
+
+  // Print results
+  printf("Optimal Guard Band for Minimum BER: %d ps with BER = %.5f\n", optimal_BER_guard_band, min_BER);
+  printf("Optimal Guard Band for Maximum Visibility: %d ps with Visibility = %.5f\n", optimal_visibility_guard_band, max_visibility);
+}
+
 int main(int argc, char *argv[])
 {
   if (argc != 2)
@@ -156,9 +242,12 @@ int main(int argc, char *argv[])
   int start_index = find_max_sum_window(histogram, WINDOW_SIZE, 3000, &BER1, &V1);
 
   // Apply guard bands and calculate BER2 and Visibility2
-  apply_guard_bands_and_calculate(histogram, start_index, 3000, &BER2, &V2);
+  apply_guard_bands_and_calculate(histogram, start_index, 3000, &BER2, &V2, GUARD_BAND);
 
   // Output the results
   printf("%s,%lf,%lf,%lf,%lf\n", GROUP, BER1, V1, BER2, V2);
+
+  // Uncomment the below code to find optimal guard band.
+  // find_optimal_guard_bands(histogram, start_index, 3000);
   return 0;
 }
