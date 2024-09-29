@@ -34,8 +34,8 @@
 */
 /*
   Is 100ps Guard Band Adequate?
-  When using timestamps_1.csv, executing the find_optimal_guard_bands() function will yield both the "Optimal Guard Band for Minimum BER" and the "Optimal Guard Band for Maximum Visibility" at 130ps.
-  Therefore, for the provided timestamps_1.csv, the optimal guard band is determined to be 130ps. 
+  When using timestamps_1.csv, executing the find_optimal_guard_bands() function will yield both the "Optimal Guard Band for Minimum BER" and the "Optimal Guard Band for Maximum Visibility" at 110ps and 100ps respectively.
+  Therefore, for the provided timestamps_1.csv, the optimal guard band is determined to be 100ps. 
   (Note that the maximum guard band is set to 300ps to prevent the loss of too many valid signals.)
 
 
@@ -50,7 +50,7 @@
 #include <math.h> // For fmod
 
 #define WINDOW_SIZE 32000 // 32ns in picoseconds
-#define GUARD_BAND 150    // 100ps guard band
+#define GUARD_BAND 100    // 100ps guard band
 #define GROUP "M"
 #define MAX_GUARD_BAND 300 // Maximum guard band in ps
 #define MIN_GUARD_BAND 100 // Minimum guard band in ps
@@ -145,8 +145,8 @@ double find_max_sum_window(int histogram[], int size, int window_size, double *B
   }
 
   // Calculate BER and visibility
-  *BER1 = 1 - (double)D1 / (C1 + D1 + C2);
-  *V1 = (double)D1 / (C1 + C2);
+  *BER1 = (double)D1 / (C1 + D1 + C2);
+  *V1 = (double)(C1 + C2) / D1;
 
   return start_index;
 }
@@ -156,12 +156,27 @@ void apply_guard_bands_and_calculate(int histogram[], int start_index, int windo
 {
   int part_size = window_size / 3;
   int C1 = 0, D1 = 0, C2 = 0;
+  int last_bin_index = start_index + window_size - 1;
 
   // Apply guard bands (ignore the first and last 100ps of each 1ns bin)
-  for (int i = start_index; i < start_index + window_size; i++)
+  for (int i = start_index; i <= last_bin_index; i++)
   {
     // If within the guard band, skip the timestamp
-    if ((i % 1000) < guard_band || (i % 1000) > (1000 - guard_band))
+    int half_guard_band = (int)guard_band / 2;
+
+    // First bin: only remove timestamps from the last half_guard_band ps
+    if (i == 0 && (i % 1000) > (1000 - half_guard_band))
+    {
+      continue; // Skip last half_guard_band ps of the first bin
+    }
+
+    // Last bin: only remove timestamps from the first half_guard_band ps
+    if (i == last_bin_index && (i % 1000) < half_guard_band)
+    {
+      continue; // Skip first half_guard_band ps of the last bin
+    }
+
+    if ((i % 1000) < half_guard_band || (i % 1000) > (1000 - half_guard_band))
     {
       continue; // Skip timestamps in the guard band
     }
@@ -182,8 +197,8 @@ void apply_guard_bands_and_calculate(int histogram[], int start_index, int windo
   }
 
   // Calculate BER and visibility after applying guard bands
-  *BER2 = 1 - (double)D1 / (C1 + D1 + C2);
-  *V2 = (double)D1 / (C1 + C2);
+  *BER2 = (double)D1 / (C1 + D1 + C2);
+  *V2 = (C1 + C2) / D1 ;
 }
 
 // Function to loop through different guard bands and find optimal values
